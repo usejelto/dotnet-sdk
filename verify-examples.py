@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Compile the actual docs blocks and consume the nupkg, with real framework references."""
 import argparse
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -19,7 +21,17 @@ feed = root / 'artifacts'
 version = ET.parse(root / 'Jelto/Jelto.csproj').findtext('.//Version')
 if not options.registry and not (feed / f'Jelto.{version}.nupkg').is_file():
     raise SystemExit('Run make package in the SDK directory first.')
-blocks = re.findall(r'```csharp\n(.*?)\n```', (root / 'vendor/jelto/dotnet.md').read_text(), re.S)
+# The pinned guide is vendored from the docs repo; verify it against its manifest before
+# trusting its contents, the same way vendor/test-tools/install.py pins the contracts archive.
+vendor = root / 'vendor/jelto'
+manifest = json.loads((vendor / 'manifest.json').read_text())
+if {p.name for p in vendor.iterdir()} != set(manifest['files']) | {'manifest.json'}:
+    raise SystemExit('vendor/jelto disagrees with its file manifest')
+for name, entry in manifest['files'].items():
+    digest = hashlib.sha256((vendor / name).read_bytes()).hexdigest()
+    if digest != entry['sha256']:
+        raise SystemExit(f'vendor/jelto/{name} SHA-256 mismatch')
+blocks = re.findall(r'```csharp\n(.*?)\n```', (vendor / 'dotnet.md').read_text(), re.S)
 if not blocks:
     raise SystemExit('The pinned guide must contain C# examples to verify.')
 env = {**os.environ, 'DOTNET_CLI_TELEMETRY_OPTOUT': '1', 'DOTNET_NOLOGO': '1'}
@@ -39,10 +51,14 @@ with tempfile.TemporaryDirectory(prefix='jelto-dotnet-consumer-') as temp:
         (directory / 'Sample.csproj').write_text(f'''<Project Sdk="Microsoft.NET.Sdk">
 <PropertyGroup><TargetFramework>{target}</TargetFramework><OutputType>{output}</OutputType>
 <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-<NuGetAudit>false</NuGetAudit>{framework}</PropertyGroup><ItemGroup>{references}</ItemGroup></Project>''')
+<WarningsNotAsErrors>NU1900</WarningsNotAsErrors>{framework}</PropertyGroup><ItemGroup>{references}</ItemGroup></Project>''')
         (directory / 'Program.cs').write_text(source)
         sources = [] if options.registry else ['--source', str(feed)]
-        subprocess.run([cli, 'restore', str(directory), *sources, '--source', 'https://api.nuget.org/v3/index.json'], env=env, check=True)
+        # Only the plain consumer restores from the local feed alone, so the artifact
+        # under test is the one just packed; the desktop kinds need their targeting
+        # packs and Avalonia from nuget.org.
+        if options.registry or kind in ('wpf', 'winforms', 'avalonia'): sources += ['--source', 'https://api.nuget.org/v3/index.json']
+        subprocess.run([cli, 'restore', str(directory), *sources], env=env, check=True)
         subprocess.run([cli, 'build', str(directory), '-c', 'Release', '--no-restore', '-p:UseSharedCompilation=false'], env=env, check=True)
         return directory
     for index, block in enumerate(blocks):

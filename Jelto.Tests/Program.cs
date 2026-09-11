@@ -138,6 +138,54 @@ var tests = new (string Name, Action Run)[] {
         using var second = new Engine(first.Path,"http://127.0.0.1:1",Pin); second.Initialize(Key); Check(second.InstallId=="","competing writer active");
         Check(first.Sdk.InstallId==id,"competing writer changed identity");
     }),
+    ("POSIX directory and file modes are 0700/0600, reasserted on an existing directory", () => {
+        if (OperatingSystem.IsWindows()) return;
+        using var box = new Box(pin: Pin); box.Sdk.Initialize(Key); box.Sdk.Track("x"); box.Sdk.Advance(3000);
+        var mask = UnixFileMode.GroupRead|UnixFileMode.GroupWrite|UnixFileMode.GroupExecute|UnixFileMode.OtherRead|UnixFileMode.OtherWrite|UnixFileMode.OtherExecute;
+        Check(File.GetUnixFileMode(box.Path) == (UnixFileMode.UserRead|UnixFileMode.UserWrite|UnixFileMode.UserExecute), "state dir not 0700");
+        foreach (var file in Directory.EnumerateFiles(box.Path))
+            Check((File.GetUnixFileMode(file) & mask) == 0, "file has group/other bits: " + file);
+        box.Sdk.Dispose();
+        // Loosen an existing directory and file, then confirm Open() re-asserts the mode
+        // rather than trusting whatever an earlier, looser SDK version left behind.
+        File.SetUnixFileMode(box.Path, UnixFileMode.UserRead|UnixFileMode.UserWrite|UnixFileMode.UserExecute|UnixFileMode.GroupRead|UnixFileMode.OtherRead);
+        var statePath = System.IO.Path.Combine(box.Path, "state.json");
+        File.SetUnixFileMode(statePath, UnixFileMode.UserRead|UnixFileMode.UserWrite|UnixFileMode.GroupRead);
+        using var resumed = new Engine(box.Path, "http://127.0.0.1:1/v1/e", Pin); resumed.Initialize(Key); _ = resumed.InstallId;
+        Check(File.GetUnixFileMode(box.Path) == (UnixFileMode.UserRead|UnixFileMode.UserWrite|UnixFileMode.UserExecute), "reused dir mode not reasserted");
+        Check((File.GetUnixFileMode(statePath) & mask) == 0, "reused state.json mode not reasserted");
+    }),
+    ("a planted temp-path symlink is unlinked rather than followed", () => {
+        if (OperatingSystem.IsWindows()) return;
+        using var box = new Box(pin: Pin); box.Sdk.Initialize(Key); box.Sdk.Track("seed"); box.Sdk.Dispose();
+        var victim = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "jelto-symlink-victim-" + Guid.NewGuid());
+        File.WriteAllText(victim, "precious");
+        try
+        {
+            var tmp = System.IO.Path.Combine(box.Path, "state.json.tmp");
+            File.CreateSymbolicLink(tmp, victim);
+            using var resumed = new Engine(box.Path, "http://127.0.0.1:1/v1/e", Pin); resumed.Initialize(Key);
+            resumed.Track("after-resume"); resumed.Barrier();
+            Check(File.ReadAllText(victim) == "precious", "planted symlink victim was overwritten");
+            // Atomic() renames the temp file onto state.json on success, so the temp path
+            // itself is gone; what matters is that it is never left as (or backed by) the
+            // planted symlink.
+            Check(!File.Exists(tmp) && (!File.Exists(System.IO.Path.Combine(box.Path, "state.json")) || (File.GetAttributes(System.IO.Path.Combine(box.Path, "state.json")) & FileAttributes.ReparsePoint) == 0), "temp path is still a symlink after an atomic write");
+        }
+        finally { File.Delete(victim); }
+    }),
+    ("a durable poisoned `t` cannot wedge the worker; wire values stay canonical", () => {
+        using var box = new Box(pin: Pin); box.Sdk.Initialize(Key); box.Sdk.Track("poison"); box.Sdk.Barrier(); box.Sdk.Dispose();
+        var queuePath = System.IO.Path.Combine(box.Path, "queue.jsonl");
+        var lines = File.ReadAllLines(queuePath);
+        for (var i = 0; i < lines.Length; i++)
+            if (lines[i].Contains("\"n\":\"poison\"")) lines[i] = lines[i].Replace("\"t\":\"" + Pin + "\"", "\"t\":\"0" + Pin + "\"");
+        File.WriteAllLines(queuePath, lines);
+        using var server = new Server();
+        using var resumed = new Engine(box.Path, server.Url, Pin); resumed.Initialize(Key); resumed.Advance(6000);
+        Check(server.Requests.Any(), "no request arrived after a durable poisoned t");
+        Check(server.Requests.SelectMany(r => r.GetProperty("e").EnumerateArray()).All(e => e.GetProperty("t").GetRawText() == Pin), "a poisoned t leaked onto the wire");
+    }),
     ("batch limits and retries retain IDs and timestamps", () => {
         using var server=new Server { Status=503, RetryAfter="3" }; using var box=new Box(server.Url,Pin); box.Sdk.Initialize(Key); box.Sdk.Track("x"); box.Sdk.Advance(6000);
         var first=server.Bodies.First(); var state=State(box.Sdk); Check(state.GetProperty("backoff_step_ms").GetInt32()==2000,"backoff did not advance");
@@ -191,6 +239,27 @@ var tests = new (string Name, Action Run)[] {
         Wait(()=>State(box.Sdk).GetProperty("backoff_step_ms").GetInt32()>0,6500);
         Check(watch.ElapsedMilliseconds is >=4500 and <6000,"request timeout");
         watch.Restart();box.Sdk.Terminate();Check(watch.ElapsedMilliseconds<650,"termination budget");
+    }),
+    ("Initialize starts its own worker thread directly, unblocked by a saturated ThreadPool", () => {
+        ThreadPool.GetMinThreads(out var minWorker, out var minIo);
+        ThreadPool.SetMinThreads(1, 1);
+        var release = new ManualResetEventSlim(false);
+        var saturate = Math.Max(Environment.ProcessorCount * 2, 4);
+        for (var i = 0; i < saturate; i++) ThreadPool.QueueUserWorkItem(_ => release.Wait());
+        try
+        {
+            using var box = new Box(pin: Pin); var watch = Stopwatch.StartNew();
+            box.Sdk.Initialize(Key); var id = box.Sdk.InstallId;
+            Check(watch.ElapsedMilliseconds < 500, "InstallId blocked behind a saturated ThreadPool: " + watch.ElapsedMilliseconds + " ms");
+            Check(Guid.Parse(id).Version() == 4, "UUIDv4 missing under a saturated ThreadPool");
+        }
+        finally { release.Set(); ThreadPool.SetMinThreads(minWorker, minIo); }
+    }),
+    ("idle termination does not sleep its whole shutdown budget", () => {
+        using var server = new Server(); using var box = new Box(server.Url, Pin); box.Sdk.Initialize(Key); box.Sdk.Advance(6000);
+        Check(Events(box.Sdk).Length == 0, "queue not drained before termination");
+        var watch = Stopwatch.StartNew(); box.Sdk.Terminate();
+        Check(watch.ElapsedMilliseconds < 200, "idle termination exceeded 200 ms: " + watch.ElapsedMilliseconds);
     }),
     ("app updates baseline legacy state, compare exact versions and suppress same-day heartbeats", () => {
         using var box = new Box(pin: Pin, appVersion: "Release A+1"); box.Sdk.Initialize(Key);

@@ -54,8 +54,12 @@ internal sealed record EventRecord(string Id, string Name, string Time, byte[] D
         var root = doc.RootElement;
         var id = root.GetProperty("id").GetString()!;
         var name = root.GetProperty("n").GetString()!;
-        var time = root.GetProperty("t").GetString()!;
-        if (!Guid.TryParseExact(id, "D", out var uuid) || uuid == Guid.Empty || !Wire.Name().IsMatch(name) || Wire.Instant(time) is null) return null;
+        var rawTime = root.GetProperty("t").GetString()!;
+        if (!Guid.TryParseExact(id, "D", out var uuid) || uuid == Guid.Empty || !Wire.Name().IsMatch(name) || Wire.Instant(rawTime) is not { } instant) return null;
+        // Re-canonicalize rather than trust the disk text verbatim: WriteRawValue on the wire
+        // later requires exact JSON-number grammar, and BigInteger round-tripping (e.g. "-0")
+        // does not guarantee that on its own even once Wire.Integer() rejects leading zeros.
+        var time = Wire.Decimal(instant);
         var props = root.GetProperty("props").EnumerateObject().ToDictionary(p => p.Name, p => (object?)p.Value);
         if (Wire.Props(name, props, _ => { }) is null) return null;
         EventMetadata? metadata = root.TryGetProperty("meta", out var meta) ? meta.Deserialize<EventMetadata>() : null;
@@ -142,6 +146,10 @@ internal sealed class EventBuffer
 
 internal sealed class Storage(string directory, Action<string> log) : IDisposable
 {
+    // POSIX-only: the state directory is 0700 and every file within it is 0600, re-asserted
+    // even when the directory or a file already existed (an upgrade from a looser mode).
+    private const UnixFileMode DirMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+    private const UnixFileMode FileModeRW = UnixFileMode.UserRead | UnixFileMode.UserWrite;
     private FileStream? lease;
     private readonly HashSet<string> persisted = new(StringComparer.Ordinal);
     private long journalBytes;
@@ -156,12 +164,30 @@ internal sealed class Storage(string directory, Action<string> log) : IDisposabl
         var component = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(assembly))).ToLowerInvariant()[..24];
         return Path.Combine(root, "Jelto", component, key, slug ?? os);
     }
+    private static FileStream OpenFile(string path, FileMode mode, FileAccess access, FileShare share)
+    {
+        var options = new FileStreamOptions { Mode = mode, Access = access, Share = share };
+        if (!OperatingSystem.IsWindows()) options.UnixCreateMode = FileModeRW;
+        return new FileStream(path, options);
+    }
     internal bool Open()
     {
         try
         {
-            Directory.CreateDirectory(directory);
-            lease = new FileStream(Path.Combine(directory, "writer.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            if (!OperatingSystem.IsWindows())
+            {
+                Directory.CreateDirectory(directory, DirMode);
+                // Re-assert the mode even on a pre-existing directory, so an upgrade from an
+                // earlier, looser SDK version closes the exposure on the next launch.
+                File.SetUnixFileMode(directory, DirMode);
+                foreach (var name in new[] { "writer.lock", "state.json", "queue.jsonl" })
+                {
+                    var path = Path.Combine(directory, name);
+                    if (File.Exists(path)) File.SetUnixFileMode(path, FileModeRW);
+                }
+            }
+            else Directory.CreateDirectory(directory);
+            lease = OpenFile(Path.Combine(directory, "writer.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             return true;
         }
         catch { log("storage unavailable or already in use; SDK inactive"); return false; }
@@ -259,7 +285,7 @@ internal sealed class Storage(string directory, Action<string> log) : IDisposabl
                 foreach (var e in queue) { persisted.Add(e.Id); journalBytes += e.Data.Length + 1; }
                 return true;
             }
-            using var output = new FileStream(QueuePath, FileMode.Append, FileAccess.Write, FileShare.Read);
+            using var output = OpenFile(QueuePath, FileMode.Append, FileAccess.Write, FileShare.Read);
             foreach (var e in queue)
             {
                 if (persisted.Contains(e.Id)) continue;
@@ -274,7 +300,11 @@ internal sealed class Storage(string directory, Action<string> log) : IDisposabl
     private static void Atomic(string path, Action<FileStream> write)
     {
         var temp = path + ".tmp";
-        using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None)) { write(stream); stream.Flush(true); }
+        // Delete rather than truncate: a planted symlink is unlinked, not followed, so its
+        // target is never touched. FileMode.CreateNew then refuses to reuse anything left
+        // behind by a failed delete (e.g. an obstacle directory), preserving the failure path.
+        try { File.Delete(temp); } catch { }
+        using (var stream = OpenFile(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { write(stream); stream.Flush(true); }
         File.Move(temp, path, true);
     }
     internal void Wipe()

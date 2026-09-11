@@ -9,6 +9,5 @@
     <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
     <DebugType>embedded</DebugType>
     <PathMap>$(MSBuildThisFileDirectory)=/_/sdk/dotnet/</PathMap>
-    <NuGetAudit>false</NuGetAudit>
   </PropertyGroup>
 </Project>

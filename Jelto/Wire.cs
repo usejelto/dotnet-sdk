@@ -18,7 +18,7 @@ internal static partial class Wire
     [GeneratedRegex(@"\A[a-z0-9_-]{1,32}\z")] internal static partial Regex Step();
     [GeneratedRegex(@"\A[a-z0-9_.-]{1,64}\z")] internal static partial Regex Reason();
     [GeneratedRegex(@"\A[a-z]+/[0-9A-Za-z.+-]{1,24}\z")] internal static partial Regex Version();
-    [GeneratedRegex(@"\A-?[0-9]+\z")] internal static partial Regex Integer();
+    [GeneratedRegex(@"\A-?(0|[1-9][0-9]*)\z")] internal static partial Regex Integer();
     [GeneratedRegex(@"\A[0-9]+\z")] internal static partial Regex Seconds();
 
     internal static string Decimal(BigInteger value) => value.ToString(CultureInfo.InvariantCulture);

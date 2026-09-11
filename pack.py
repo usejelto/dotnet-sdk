@@ -18,7 +18,7 @@ package_name = f'Jelto.{version}.nupkg'
 def build(directory, snapshot):
     shutil.copytree(snapshot, directory)
     subprocess.run([dotnet, 'pack', str(directory / 'Jelto'), '-c', 'Release', '-o', str(directory / 'out'),
-                    '-p:UseSharedCompilation=false', '-p:NuGetAudit=false'], env=env, check=True)
+                    '-p:UseSharedCompilation=false'], env=env, check=True)
     package = directory / 'out' / package_name
     canonical = directory / package_name
     with zipfile.ZipFile(package) as source, zipfile.ZipFile(canonical, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as target:

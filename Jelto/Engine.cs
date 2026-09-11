@@ -35,7 +35,7 @@ internal sealed class Engine : IDisposable
     private bool debug;
     private int peakAccounted;
     internal bool Debug { get => Volatile.Read(ref debug); set => Volatile.Write(ref debug, value); }
-    internal bool ClockPinned => clockPin.HasValue;
+    internal bool ClockPinned { get { lock (gate) return clockPin.HasValue; } }
     internal string InstallId { get { Barrier(); lock (gate) return id; } }
 
     internal Engine(string? stateDir = null, string? endpointOverride = null, string? pin = null, string? platform = null, string? appVersion = null)
@@ -75,11 +75,12 @@ internal sealed class Engine : IDisposable
             }
             var at = Now();
             commands.Enqueue(() => { try { Bootstrap(product, app, url, at); } catch { Inactive("SDK initialization failed"); } });
+            // Started directly rather than via the ThreadPool: a saturated pool must never
+            // delay the worker's own dedicated thread, or every Invoke behind it stalls too.
             if (worker is null)
             {
                 worker = new Thread(Run) { IsBackground = true, Name = "Jelto analytics" };
-                var background = worker;
-                ThreadPool.QueueUserWorkItem(_ => Safe(background.Start));
+                worker.Start();
             }
             wake.Set();
         }
@@ -274,7 +275,10 @@ internal sealed class Engine : IDisposable
             complete = new(TaskCreationOptions.RunContinuationsAsynchronously);
             commands.Enqueue(() => { try { action(); } finally { complete.SetResult(); } }); wake.Set();
         }
-        complete.Task.GetAwaiter().GetResult();
+        // Bounded: a caller must never block forever on a worker that cannot make
+        // progress. A timeout leaves the caller with whatever stale/default value it
+        // already had, exactly as if the action had not run yet.
+        if (!complete.Task.Wait(5000)) Log("SDK worker did not respond within 5 s; call returns stale/default state");
     }
     internal void Barrier() => Safe(() => Invoke(() => Persist()));
     internal void Advance(long ms)
@@ -301,7 +305,9 @@ internal sealed class Engine : IDisposable
     {
         if (!accepting) return false;
         var now = Now();
-        return !Gated(now) && (state.StopProbeDue || (pending && events.Size.Count > 0) || initAt <= now || trackAt <= now);
+        BigInteger? track;
+        lock (gate) track = trackAt;
+        return !Gated(now) && (state.StopProbeDue || (pending && events.Size.Count > 0) || initAt <= now || track <= now);
     }
     private void Run()
     {
@@ -395,7 +401,12 @@ internal sealed class Engine : IDisposable
         var count = Encoding.UTF8.GetByteCount(key) + 24;
         foreach (var e in candidates)
         {
-            var bytes = Render(e);
+            byte[] bytes;
+            // A durable record that cannot be rendered (e.g. a pre-existing malformed `t`)
+            // must never re-enter this loop unbounded; discard just that one record instead
+            // of throwing, which previously left the worker retrying the same poison forever.
+            try { bytes = Render(e); }
+            catch { events.Remove([e.Id]); dirty = true; Log("drop event: could not render onto the wire; discarding"); continue; }
             if (count + bytes.Length + 1 > Wire.MaxBody) break;
             count += bytes.Length + 1; rendered.Add(bytes); used.Add(e);
         }
@@ -503,14 +514,28 @@ internal sealed class Engine : IDisposable
             if (worker is null || quitting) return;
             commands.Enqueue(() => pending = true); wake.Set();
         }
-        // ProcessExit must remain bounded even with a blocked filesystem or active request.
+        // ProcessExit must remain bounded even with a blocked filesystem or active request,
+        // but idle termination (nothing queued, no flight, nothing dirty) returns early.
         var deadline = Environment.TickCount64 + 550;
-        while (Environment.TickCount64 < deadline) Thread.Sleep(5);
-        lock (gate) { quitting = true; accepting = false; generation++; requestCancellation?.Cancel(); wake.Set(); Monitor.PulseAll(gate); }
+        while (Environment.TickCount64 < deadline && !Idle()) Thread.Sleep(5);
+        lock (gate)
+        {
+            quitting = true; accepting = false; generation++; requestCancellation?.Cancel();
+            // A command enqueued concurrently with this transition (e.g. a caller blocked
+            // inside Invoke) must not be abandoned: drain it here so its completion, and
+            // any TaskCompletionSource it wraps, is always observed rather than left dangling.
+            while (commands.Count > 0) Safe(commands.Dequeue());
+            wake.Set(); Monitor.PulseAll(gate);
+        }
         if (worker?.IsAlive == true) worker.Join(25);
         storage?.Dispose();
         if (exitRegistered) { AppDomain.CurrentDomain.ProcessExit -= OnExit; exitRegistered = false; }
     });
+    // `dirty` alone is not sufficient: it only tracks disk persistence and can clear on its
+    // own worker-loop cadence before a just-forced flush has actually reached Send/Dispatch.
+    // `pending` is the same flag Tick() itself checks before dispatching, so it is the correct
+    // signal for "no outstanding network work", including a retry a failed flight just scheduled.
+    private bool Idle() { lock (gate) return commands.Count == 0 && flight is null && !dirty && !pending; }
     public void Dispose() { Terminate(); transport.Dispose(); }
     private sealed record Flight(Task<Outcome> Task, EventRecord[] Events, bool Probe, long Generation, int Bytes);
 }
