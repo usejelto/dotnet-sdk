@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><IsPackable>false</IsPackable><UseAppHost>true</UseAppHost></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../Jelto/Jelto.csproj" /></ItemGroup>
+</Project>

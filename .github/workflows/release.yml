@@ -1,0 +1,92 @@
+# Governing contract: spec/ci.md §7 in the source monorepo; see RELEASING.md.
+name: dotnet release
+on:
+  push:
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish this tag after checks (also requires RELEASE_PUBLISH_ENABLED)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: component-release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - run: python3 vendor/release-tools/release.py validate
+
+  checks:
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+    with:
+      release: true
+
+  publish:
+    needs: [validate, checks]
+    if: vars.RELEASE_PUBLISH_ENABLED == 'true' && (github.event_name == 'push' || inputs.publish)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-Linux
+          path: release-artifacts/
+      - name: Verify artifact source and contents
+        run: python3 vendor/release-tools/release.py verify
+      - name: Check existing registry versions
+        id: registry
+        run: python3 vendor/release-tools/release.py status
+      - uses: NuGet/login@v1
+        if: steps.registry.outputs.nuget_exists != 'true'
+        id: nuget
+        with:
+          user: ${{ vars.NUGET_USER }}
+      - name: Publish verified NuGet package
+        if: steps.registry.outputs.nuget_exists != 'true'
+        env:
+          NUGET_API_KEY: ${{ steps.nuget.outputs.NUGET_API_KEY }}
+        run: dotnet nuget push release-artifacts/*.nupkg --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+      - name: Verify registry contents and installation
+        run: |
+          python3 vendor/release-tools/release.py wait
+          python3 vendor/release-tools/release.py smoke --registry
+      - name: Create or finish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 vendor/release-tools/release.py github
