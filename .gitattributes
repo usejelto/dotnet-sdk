@@ -1,0 +1,4 @@
+# Vendored files are verified byte for byte against their manifests, and the
+# packaging checks hash what is on disk. Keep the working tree identical to the
+# repository on every platform, including Windows checkouts.
+* -text
