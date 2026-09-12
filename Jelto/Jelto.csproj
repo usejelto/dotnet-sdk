@@ -1,12 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <RepositoryUrl>https://github.com/usejelto/dotnet-sdk</RepositoryUrl>
     <Version>0.1.0</Version>
     <PackageId>Jelto</PackageId>
     <Authors>Jelto</Authors>
     <Description>Privacy-focused desktop analytics for .NET 8+ on Windows, macOS and Linux.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://jelto.io</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/usejelto/dotnet-sdk</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>analytics;desktop;privacy;windows;macos;linux</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
