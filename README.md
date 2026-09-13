@@ -2,13 +2,15 @@
 
 Dependency-free desktop analytics for .NET 8+ on Windows, macOS and Linux.
 
-Version 0.1.0 is prepared for release; use a local package until NuGet publication.
-With .NET SDK 8, Python 3.11 or later, and Make installed, run `make package`
-from this component's source root. Install from the generated feed:
+The package is published on NuGet as `Jelto`. Add it to your desktop project:
 
 ```sh
-dotnet add package Jelto --version 0.1.0 --source /absolute/path/to/jelto-dotnet/artifacts
+dotnet add package Jelto
 ```
+
+To build a local package instead, install .NET SDK 8, Python 3.11 or later and
+Make, run `make package` from this component's source root, and add
+`--source /absolute/path/to/artifacts` to the command above.
 
 ```csharp
 using Jelto;
@@ -84,8 +86,7 @@ Questions, bug reports and documentation improvements are welcome. See
 [Contributing](https://github.com/usejelto/dotnet-sdk/blob/main/CONTRIBUTING.md),
 [Code of Conduct](https://github.com/usejelto/dotnet-sdk/blob/main/CODE_OF_CONDUCT.md), and
 [Security policy](https://github.com/usejelto/dotnet-sdk/blob/main/SECURITY.md).
-Until the public repository is available, these files are also included in the
-source root; contact [taha@jelto.io](mailto:taha@jelto.io) for help.
+Contact [taha@jelto.io](mailto:taha@jelto.io) for anything else.
 
 Jelto-owned software and associated documentation use the [MIT license](LICENSE).
 Third-party materials retain their own terms, including the Contributor Covenant

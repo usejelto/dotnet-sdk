@@ -9,31 +9,29 @@ summary: "Initialize Jelto in a .NET desktop app and track a registered action."
 
 Measure desktop app activity and registered actions from your .NET application.
 
-> **Not published yet.** The SDK package is prepared but has no public installation address yet. Replace the uppercase installation placeholders below after publication. They are not working registry coordinates.
-
 ## Set up with AI
 
 For a copyable setup prompt with your app details, open **Settings → Installation
 → Apps**, expand your app's **SDK setup**, choose **.NET** and select **Copy prompt**.
-The prompt uses the installation placeholders described below. See
+The prompt names the package described below. See
 [Set up with AI](../start/apps.md#set-up-with-ai) for what to expect.
 
 ## Setup steps
 
-1. Add the published NuGet package to your desktop project.
+1. Add the `Jelto` NuGet package to your desktop project.
 2. Initialize once during application startup, using the registered app slug.
 3. Track an action only after it succeeds.
 4. Launch the app and verify activity and the event in Jelto.
 
-## Install when published
+## Install
 
-Requires .NET 8 or later. This desktop SDK supports Windows, macOS and Linux. Replace the package placeholders before running:
+Requires .NET 8 or later. This desktop SDK supports Windows, macOS and Linux. The package is published on NuGet as `Jelto`; its source and releases are at [usejelto/dotnet-sdk](https://github.com/usejelto/dotnet-sdk). Add the current release to your desktop project:
 
 ```sh
-dotnet add package REPLACE_WITH_PUBLISHED_JELTO_NUGET_PACKAGE --version REPLACE_WITH_RELEASE_VERSION
+dotnet add package Jelto
 ```
 
-The prepared API uses the `Jelto` namespace. Mobile, Unity and .NET Framework are outside this desktop integration.
+The API uses the `Jelto` namespace. Mobile, Unity and .NET Framework are outside this desktop integration.
 
 ## Initialize once
 
