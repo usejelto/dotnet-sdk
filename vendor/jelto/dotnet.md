@@ -92,3 +92,7 @@ If data is missing, check the product ID, registered app slug, collection permis
 `JeltoClient.SetProps` updates install properties. `JeltoClient.Disable()` stops delivery and wipes local analytics state. `JeltoClient.Reset()` rotates the install ID, which is available as `JeltoClient.InstallId` for app-data requests. Reinitialize only after the app permits analytics again.
 
 Call `JeltoClient.Debug = true` only during local diagnosis. Each live process must use its own state directory. Test the distributed app as well as your IDE build.
+
+## Track updater outcomes
+
+Use the existing tracking API to send `app_update` stages, failures, and explicit postponements. They appear under **App updates → Update activity**, separately from version changes confirmed on launch. See [Track update activity](../guides/understand-app-usage.md#track-update-activity) for properties and updater callbacks.
