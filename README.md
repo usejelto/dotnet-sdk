@@ -22,8 +22,8 @@ JeltoClient.Onboarding("permissions", "ok");
 ```
 
 Register custom events and their property keys in Settings > Events. Initialize only after
-telemetry may start. The SDK creates a random install ID, sends a daily heartbeat and delays the
-install claim by 0–6 hours. One product/app per process. Optional named `app` and `endpoint`
+telemetry may start. The SDK creates a random install ID, sends a daily heartbeat and queues the
+install claim immediately on first initialization. One product/app per process. Optional named `app` and `endpoint`
 arguments select a registered slug and a custom ingest URL; otherwise the endpoint is
 `JELTO_ENDPOINT` or `https://in.jelto.io/v1/e`.
 

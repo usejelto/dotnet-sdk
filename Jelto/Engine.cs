@@ -242,7 +242,7 @@ internal sealed class Engine : IDisposable
     private void CreateIdentity(BigInteger now)
     {
         if (state.InstallId == "") state.InstallId = Guid.NewGuid().ToString("D");
-        if (!state.InstallClaimed && state.InstallDueAt is null) state.InstallDueAt = Wire.Decimal(now + Random.Shared.Next(21600001));
+        if (!state.InstallClaimed && state.InstallDueAt is null) state.InstallDueAt = Wire.Decimal(now);
         lock (gate) id = state.InstallId;
     }
     private void OnExit(object? sender, EventArgs args) => Terminate();
@@ -352,7 +352,10 @@ internal sealed class Engine : IDisposable
             {
                 installEnqueuedThisRun = true;
                 state.InstallFirstTry ??= Wire.Decimal(now);
-                Add(EventRecord.Create("install", Wire.Decimal(now), "{}"u8.ToArray(), metadata: metadata)); pending = true; Save();
+                Add(EventRecord.Create("install", Wire.Decimal(now), "{}"u8.ToArray(), metadata: metadata));
+                // Queue immediately while preserving the two-second initial flush (C7).
+                if (initAt is null) pending = true;
+                Save();
             }
         }
         if (Gated(now) || flight is not null) return;

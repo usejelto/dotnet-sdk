@@ -36,6 +36,20 @@ var tests = new (string Name, Action Run)[] {
         using var resumed = new Engine(box.Path, server.Url, Pin); resumed.Initialize(Key); Check(resumed.InstallId == rotated, "restart identity");
         resumed.Advance(3000); Check(State(resumed).GetProperty("last_heartbeat_day").GetString() == Wire.Decimal(BigInteger.Parse(Pin) / 86400000), "day index");
     }),
+    ("immediate install deadline and queued event survive relaunch", () => {
+        using var server = new Server();
+        using var box = new Box(pin: Pin); box.Sdk.Initialize(Key); box.Sdk.Advance(0);
+        Check(State(box.Sdk).GetProperty("install_due_at").GetString() == Pin, "install deadline has an offset");
+        var install = Events(box.Sdk).Single(e => e.GetProperty("n").GetString() == "install");
+        Check(!State(box.Sdk).GetProperty("install_claimed").GetBoolean(), "install claimed before 202");
+        box.Sdk.Dispose(); // the offline termination attempt must retain the queued install
+        using var resumed = new Engine(box.Path, server.Url, "1788159600000"); resumed.Initialize(Key);
+        Check(State(resumed).GetProperty("install_due_at").GetString() == Pin, "relaunch redrew install deadline");
+        Check(Events(resumed).Single(e => e.GetProperty("n").GetString() == "install").GetProperty("id").GetString() == install.GetProperty("id").GetString(), "relaunch replaced queued install");
+        resumed.Advance(3000);
+        Check(State(resumed).GetProperty("install_claimed").GetBoolean(), "202 did not claim install");
+        Check(server.Requests.SelectMany(r => r.GetProperty("e").EnumerateArray()).Count(e => e.GetProperty("n").GetString() == "install") == 1, "install sent twice");
+    }),
     ("disable during initialization cannot restore identity", () => {
         for (var i = 0; i < 5; i++)
         {
@@ -77,7 +91,7 @@ var tests = new (string Name, Action Run)[] {
         finally { if (Directory.Exists(path)) Directory.Delete(path, true); }
     }),
     ("validation and culture-independent exact numbers", () => {
-        using var server = new Server(); using var box = new Box(server.Url, Pin); box.Sdk.Initialize(Key);
+        using var server = new Server(); using var box = new Box(server.Url, Pin); box.Sdk.Initialize(Key); box.Sdk.Advance(0);
         var culture = CultureInfo.CurrentCulture;
         try {
             CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("tr-TR");
@@ -94,7 +108,7 @@ var tests = new (string Name, Action Run)[] {
         box.Sdk.Onboarding("permissions", "fail", "no_driver");
         box.Sdk.Advance(6000);
         var names = server.Requests.SelectMany(r=>r.GetProperty("e").EnumerateArray()).Select(e=>e.GetProperty("n").GetString()).ToArray();
-        Check(names.SequenceEqual(new[]{"heartbeat","numbers","raw","onboarding:permissions"}), "invalid values leaked: "+string.Join(',',names));
+        Check(names.SequenceEqual(new[]{"heartbeat","install","numbers","raw","onboarding:permissions"}), "invalid values leaked: "+string.Join(',',names));
         var payload = string.Join('\n',server.Bodies); Check(payload.Contains("29.90") && payload.Contains("9223372036854775808123") && payload.Contains("1e999"), "numbers rounded");
     }),
     ("BigInteger clock including negative UTC floor", () => {
@@ -266,6 +280,8 @@ var tests = new (string Name, Action Run)[] {
         var id = box.Sdk.InstallId;
         Check(State(box.Sdk).GetProperty("last_app_version").GetString() == "Release A+1", "first baseline");
         Check(!Events(box.Sdk).Any(e => e.GetProperty("n").GetString() == "app_updated"), "first launch update");
+        box.Sdk.Advance(0);
+        var originalInstall = Events(box.Sdk).Single(e => e.GetProperty("n").GetString() == "install").GetProperty("id").GetString();
         box.Sdk.LegacyVersion(); box.Sdk.Dispose();
         using (var migrated = new Engine(box.Path, "http://127.0.0.1:1/v1/e", Pin, appVersion: "Release B+2")) {
             migrated.Initialize(Key); Check(migrated.InstallId == id, "legacy identity changed");
@@ -279,7 +295,7 @@ var tests = new (string Name, Action Run)[] {
         var queue = Events(inspect);
         Check(queue.Count(e => e.GetProperty("n").GetString() == "app_updated") == 3, "missed or repeated opaque transition");
         Check(queue.Count(e => e.GetProperty("n").GetString() == "heartbeat") == 1, "same-day heartbeat gate changed");
-        Check(!queue.Any(e => e.GetProperty("n").GetString() == "install"), "update emitted install");
+        Check(queue.Single(e => e.GetProperty("n").GetString() == "install").GetProperty("id").GetString() == originalInstall, "update replaced the original queued install");
         inspect.Reset(); Check(!Events(inspect).Any(e => e.GetProperty("n").GetString() == "app_updated"), "reset retained transitions");
         Check(State(inspect).GetProperty("last_app_version").GetString() == "Release A+1", "reset lost baseline");
         inspect.Disable(); inspect.Initialize(Key); Check(!Events(inspect).Any(e => e.GetProperty("n").GetString() == "app_updated"), "disable reinit emitted update");
@@ -385,6 +401,7 @@ var tests = new (string Name, Action Run)[] {
         using (var storage = new Storage(box.Path, _ => {})) {
             Check(storage.Open(), "open interrupted retirement storage");
             var saved = storage.Load(new EventBuffer());
+            saved.InstallClaimed = true; // isolate update eviction from first-install queue admission
             var props = Wire.Props("app_updated", new Dictionary<string,object?>{{"from_version","A"},{"to_version","B"}}, _ => {})!;
             var update = EventRecord.Create("app_updated", Pin, props, metadata: new("B","macos","15","arm64",null,"dotnet/0.1.0"));
             saved.LastAppVersion = "B"; saved.PendingUpdate = update; Check(storage.Save(saved), "persist pending intent");
