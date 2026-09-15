@@ -50,6 +50,18 @@ var tests = new (string Name, Action Run)[] {
         Check(State(resumed).GetProperty("install_claimed").GetBoolean(), "202 did not claim install");
         Check(server.Requests.SelectMany(r => r.GetProperty("e").EnumerateArray()).Count(e => e.GetProperty("n").GetString() == "install") == 1, "install sent twice");
     }),
+    ("initial automatic events precede tracks admitted before bootstrap", () => {
+        using var box = new Box(pin: Pin);
+        // Force the scheduling that exposed C6 on Windows: all caller events
+        // arrive before the asynchronous bootstrap can create its claim.
+        lock (AdmissionGate(box.Sdk)) {
+            box.Sdk.Initialize(Key);
+            for (var i = 0; i < 1500; i++) box.Sdk.Track("x" + i);
+        }
+        box.Sdk.Advance(0);
+        var names = Events(box.Sdk).Select(e => e.GetProperty("n").GetString()).ToArray();
+        Check(names.SequenceEqual(Enumerable.Range(500, 1000).Select(i => "x" + i)), "late automatic event displaced a newer caller event");
+    }),
     ("install origin enum and default appear only on the claim", () => {
         Action<string, string?, string?, InstallOrigin> publicInit = JeltoClient.Initialize;
         Check(publicInit is not null, "public initialization origin argument");
@@ -341,6 +353,54 @@ var tests = new (string Name, Action Run)[] {
         var watch = Stopwatch.StartNew(); box.Sdk.Terminate();
         Check(watch.ElapsedMilliseconds < 200, "idle termination exceeded 200 ms: " + watch.ElapsedMilliseconds);
     }),
+    ("termination waits for acknowledged queue removal before allowing relaunch", () => {
+        using var server = new Server();
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var armed = false;
+        using var box = new Box(server.Url, Pin, beforeStorageReplace: path => {
+            if (Volatile.Read(ref armed) && System.IO.Path.GetFileName(path) == "queue.jsonl" && new FileInfo(path + ".tmp").Length == 0) {
+                entered.Set(); release.Wait();
+            }
+        });
+        box.Sdk.Initialize(Key); box.Sdk.Advance(0);
+        var id = box.Sdk.InstallId;
+        Volatile.Write(ref armed, true);
+        var terminated = Task.Run(box.Sdk.Terminate);
+        try {
+            Check(entered.Wait(5000), "acknowledged queue compaction never started");
+            Check(!terminated.Wait(100), "termination mistook an unfinished durable write for idle");
+        }
+        finally { release.Set(); Check(terminated.Wait(2000), "termination did not finish after compaction"); }
+        using (var disk = JsonDocument.Parse(File.ReadAllText(System.IO.Path.Combine(box.Path, "state.json"))))
+            Check(disk.RootElement.GetProperty("InstallClaimed").GetBoolean(), "acknowledgement not durable");
+        Check(File.ReadAllText(System.IO.Path.Combine(box.Path, "queue.jsonl")) == "", "acknowledged batch remained on disk");
+        using var resumed = new Engine(box.Path, server.Url, "1788159600000");
+        resumed.Initialize(Key); Check(resumed.InstallId == id, "relaunch changed identity"); resumed.Advance(3000);
+        Check(server.Requests.SelectMany(r => r.GetProperty("e").EnumerateArray()).Count(e => e.GetProperty("n").GetString() == "install") == 1, "graceful restart resent an acknowledged install");
+    }),
+    ("bounded termination keeps the writer lease until its blocked worker finishes", () => {
+        using var server = new Server();
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var armed = false;
+        using var box = new Box(server.Url, Pin, beforeStorageReplace: path => {
+            if (Volatile.Read(ref armed) && System.IO.Path.GetFileName(path) == "queue.jsonl" && new FileInfo(path + ".tmp").Length == 0) {
+                entered.Set(); release.Wait();
+            }
+        });
+        box.Sdk.Initialize(Key); box.Sdk.Advance(0); Volatile.Write(ref armed, true);
+        var terminated = Task.Run(() => { var watch = Stopwatch.StartNew(); box.Sdk.Terminate(); return watch.ElapsedMilliseconds; });
+        try {
+            Check(entered.Wait(5000), "queue compaction never started");
+            Check(terminated.Wait(1000), "blocked filesystem made termination unbounded");
+            Check(terminated.Result < 650, "termination exceeded its budget");
+            using var contender = new Storage(box.Path, _ => {});
+            Check(!contender.Open(), "termination released the writer lease while its worker still owned a write");
+        }
+        finally { release.Set(); Check(terminated.Wait(2000), "termination did not return"); }
+        Wait(() => { using var contender = new Storage(box.Path, _ => {}); return contender.Open(); }, 2000);
+    }),
     ("app updates baseline legacy state, compare exact versions and suppress same-day heartbeats", () => {
         using var box = new Box(pin: Pin, appVersion: "Release A+1"); box.Sdk.Initialize(Key);
         var id = box.Sdk.InstallId;
@@ -541,7 +601,7 @@ internal sealed class Box : IDisposable
 {
     internal string Path {get;}=System.IO.Path.Combine(System.IO.Path.GetTempPath(),"jelto-dotnet-test-"+Guid.NewGuid());
     internal Engine Sdk {get;}
-    internal Box(string? endpoint=null,string? pin=null,string? platform=null,string? appVersion=null)=>Sdk=new(Path,endpoint??"http://127.0.0.1:1/v1/e",pin,platform,appVersion);
+    internal Box(string? endpoint=null,string? pin=null,string? platform=null,string? appVersion=null,Action<string>? beforeStorageReplace=null)=>Sdk=new(Path,endpoint??"http://127.0.0.1:1/v1/e",pin,platform,appVersion,beforeStorageReplace);
     public void Dispose(){Sdk.Dispose();try{Directory.Delete(Path,true);}catch{}}
 }
 internal sealed class Server : IDisposable

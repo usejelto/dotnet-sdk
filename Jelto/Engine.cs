@@ -17,8 +17,9 @@ internal sealed class Engine : IDisposable
     private readonly string? stateOverride, environmentEndpoint, mock, versionOverride;
     private readonly string? platformOverride;
     private readonly string? appVersionOverride;
+    private readonly Action<string>? beforeStorageReplace;
     private Thread? worker;
-    private bool initialized, accepting, quitting, dirty, exitRegistered;
+    private bool initialized, accepting, quitting, dirty, exitRegistered, workerBusy;
     private long generation;
     private string id = "";
     private State state = new();
@@ -38,7 +39,7 @@ internal sealed class Engine : IDisposable
     internal bool ClockPinned { get { lock (gate) return clockPin.HasValue; } }
     internal string InstallId { get { Barrier(); lock (gate) return id; } }
 
-    internal Engine(string? stateDir = null, string? endpointOverride = null, string? pin = null, string? platform = null, string? appVersion = null)
+    internal Engine(string? stateDir = null, string? endpointOverride = null, string? pin = null, string? platform = null, string? appVersion = null, Action<string>? beforeStorageReplace = null)
     {
         stateOverride = stateDir ?? Environment.GetEnvironmentVariable("JELTO_STATE_DIR");
         environmentEndpoint = endpointOverride ?? Environment.GetEnvironmentVariable("JELTO_ENDPOINT");
@@ -46,6 +47,7 @@ internal sealed class Engine : IDisposable
         versionOverride = Environment.GetEnvironmentVariable("JELTO_CLIENT_VERSION");
         platformOverride = platform;
         appVersionOverride = appVersion ?? Environment.GetEnvironmentVariable("JELTO_APP_VERSION");
+        this.beforeStorageReplace = beforeStorageReplace;
         Debug = Environment.GetEnvironmentVariable("JELTO_DEBUG") == "1";
         var raw = pin ?? Environment.GetEnvironmentVariable("JELTO_NOW");
         clockPin = Wire.Instant(raw?.Trim());
@@ -171,11 +173,11 @@ internal sealed class Engine : IDisposable
         knownAppVersion = Wire.KnownAppVersion(appVersionOverride ?? assembly?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? assembly?.GetName().Version?.ToString());
         appVersion = knownAppVersion ?? "unknown";
         osVersion = TrimVersion(Environment.OSVersion.Version.ToString());
-        version = versionOverride ?? "dotnet/0.2.0";
+        version = versionOverride ?? "dotnet/0.2.1";
         if (version == "") version = null;
         else if (version.Length > 32 || !Wire.Version().IsMatch(version)) { Log("client version does not match ^[a-z]+/[0-9A-Za-z.+-]{1,24}$; `v` is omitted"); version = null; }
         lock (gate) metadata = new(appVersion, os, osVersion, arch, slug, version);
-        storage = new Storage(stateOverride ?? Storage.DefaultDirectory(key, slug, os), Log);
+        storage = new Storage(stateOverride ?? Storage.DefaultDirectory(key, slug, os), Log, beforeStorageReplace);
         if (!storage.Open()) { storage.Dispose(); storage = null; Inactive("storage unavailable; SDK inactive"); return; }
         // Recovery inserts historical records before newly admitted calls in the same bounded buffer.
         state = storage.Load(events);
@@ -186,6 +188,7 @@ internal sealed class Engine : IDisposable
         if (!ObserveVersion(now)) { Inactive("could not commit app version observation; SDK inactive"); return; }
         if (state.LastHeartbeatDay != Day(now)) { state.LastHeartbeatDay = Day(now); AddHeartbeat(true); }
         initAt = now + 2000;
+        QueueInstall(now, true);
         Save(); Persist(true);
     }
     private bool ObserveVersion(BigInteger now)
@@ -317,14 +320,30 @@ internal sealed class Engine : IDisposable
     }
     private void Run()
     {
-        while (true)
+        try
         {
-            Action? command;
-            lock (gate) { if (quitting) break; command = commands.Count > 0 ? commands.Dequeue() : null; Monitor.PulseAll(gate); }
-            if (command is not null) { Safe(command); continue; }
-            Safe(() => { Persist(); Tick(); });
-            wake.WaitOne(NextDelay());
+            while (true)
+            {
+                Action? command;
+                lock (gate)
+                {
+                    if (quitting && commands.Count == 0) break;
+                    command = commands.Count > 0 ? commands.Dequeue() : null;
+                    workerBusy = true;
+                    Monitor.PulseAll(gate);
+                }
+                try
+                {
+                    if (command is not null) Safe(command);
+                    else Safe(() => { Persist(); Tick(); });
+                }
+                finally { lock (gate) workerBusy = false; }
+                if (command is null) wake.WaitOne(NextDelay());
+            }
         }
+        // A bounded caller may return while a filesystem operation is still
+        // finishing. Only its worker can release the exclusive storage lease.
+        finally { storage?.Dispose(); }
     }
     private int NextDelay()
     {
@@ -354,16 +373,7 @@ internal sealed class Engine : IDisposable
         if (!state.InstallClaimed)
         {
             if (Wire.Instant(state.InstallFirstTry) is { } first && now >= first + 2592000000L) { state.InstallClaimed = true; Save(); }
-            else if (!installEnqueuedThisRun && Wire.Instant(state.InstallDueAt) <= now && !events.Contains("install"))
-            {
-                installEnqueuedThisRun = true;
-                state.InstallFirstTry ??= Wire.Decimal(now);
-                var claimProps = Wire.Json(w => { w.WriteStartObject(); w.WriteString("install_origin", state.InstallOrigin ?? "unknown"); w.WriteEndObject(); });
-                Add(EventRecord.Create("install", Wire.Decimal(now), claimProps, metadata: metadata));
-                // Queue immediately while preserving the two-second initial flush (C7).
-                if (initAt is null) pending = true;
-                Save();
-            }
+            else QueueInstall(now, false);
         }
         if (Gated(now) || flight is not null) return;
         if (state.StopUntil is not null) { state.StopUntil = null; Log("kill switch elapsed"); Save(); }
@@ -377,6 +387,19 @@ internal sealed class Engine : IDisposable
         if (!pending) return;
         if (events.Size.Count == 0) { pending = false; return; }
         Send(events.Snapshot(100), false);
+    }
+    private void QueueInstall(BigInteger now, bool first)
+    {
+        if (state.InstallClaimed || installEnqueuedThisRun || Wire.Instant(state.InstallDueAt) > now || events.Contains("install")) return;
+        if (Wire.Instant(state.InstallFirstTry) is { } tried && now >= tried + 2592000000L) return;
+        installEnqueuedThisRun = true;
+        state.InstallFirstTry ??= Wire.Decimal(now);
+        var props = Wire.Json(w => { w.WriteStartObject(); w.WriteString("install_origin", state.InstallOrigin ?? "unknown"); w.WriteEndObject(); });
+        // Bootstrap is asynchronous: the initial claim belongs before calls
+        // already admitted after Initialize, just like the initial heartbeat.
+        Add(EventRecord.Create("install", Wire.Decimal(now), props, metadata: metadata), first);
+        if (initAt is null) pending = true;
+        Save();
     }
     private byte[] Render(EventRecord e) => Wire.Json(w => {
         var observed = e.Metadata ?? metadata!;
@@ -532,21 +555,18 @@ internal sealed class Engine : IDisposable
         lock (gate)
         {
             quitting = true; accepting = false; generation++; requestCancellation?.Cancel();
-            // A command enqueued concurrently with this transition (e.g. a caller blocked
-            // inside Invoke) must not be abandoned: drain it here so its completion, and
-            // any TaskCompletionSource it wraps, is always observed rather than left dangling.
-            while (commands.Count > 0) Safe(commands.Dequeue());
+            // The worker completes queued commands before exiting. Running them
+            // here would race its current filesystem operation and could block
+            // ProcessExit beyond the shutdown budget.
             wake.Set(); Monitor.PulseAll(gate);
         }
         if (worker?.IsAlive == true) worker.Join(25);
-        storage?.Dispose();
         if (exitRegistered) { AppDomain.CurrentDomain.ProcessExit -= OnExit; exitRegistered = false; }
     });
-    // `dirty` alone is not sufficient: it only tracks disk persistence and can clear on its
-    // own worker-loop cadence before a just-forced flush has actually reached Send/Dispatch.
-    // `pending` is the same flag Tick() itself checks before dispatching, so it is the correct
-    // signal for "no outstanding network work", including a retry a failed flight just scheduled.
-    private bool Idle() { lock (gate) return commands.Count == 0 && flight is null && !dirty && !pending; }
+    // dirty clears when a snapshot is taken, before that snapshot reaches disk.
+    // workerBusy also covers acknowledgement compaction and dequeued controls;
+    // pending covers a forced flush or a retry scheduled by a failed request.
+    private bool Idle() { lock (gate) return !workerBusy && commands.Count == 0 && flight is null && !dirty && !pending; }
     public void Dispose() { Terminate(); transport.Dispose(); }
     private sealed record Flight(Task<Outcome> Task, EventRecord[] Events, bool Probe, long Generation, int Bytes);
 }

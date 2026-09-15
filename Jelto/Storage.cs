@@ -88,7 +88,7 @@ internal sealed class EventBuffer
             {
                 var node = events.First;
                 while (node is not null && node.Value.Historical) node = node.Next;
-                if (node is null) events.AddLast(e); else events.AddBefore(node, e with { Historical = true });
+                if (node is null) events.AddLast(e with { Historical = true }); else events.AddBefore(node, e with { Historical = true });
             }
             else events.AddLast(e);
             bytes += e.Data.Length + 1;
@@ -145,7 +145,7 @@ internal sealed class EventBuffer
     internal void Clear() { lock (gate) { events.Clear(); bytes = 0; watchedId = null; watchedEvicted = false; } }
 }
 
-internal sealed class Storage(string directory, Action<string> log) : IDisposable
+internal sealed class Storage(string directory, Action<string> log, Action<string>? beforeReplace = null) : IDisposable
 {
     // POSIX-only: the state directory is 0700 and every file within it is 0600, re-asserted
     // even when the directory or a file already existed (an upgrade from a looser mode).
@@ -300,7 +300,7 @@ internal sealed class Storage(string directory, Action<string> log) : IDisposabl
         }
         catch { log("could not persist event queue; retaining bounded memory queue"); return false; }
     }
-    private static void Atomic(string path, Action<FileStream> write)
+    private void Atomic(string path, Action<FileStream> write)
     {
         var temp = path + ".tmp";
         // Delete rather than truncate: a planted symlink is unlinked, not followed, so its
@@ -308,6 +308,7 @@ internal sealed class Storage(string directory, Action<string> log) : IDisposabl
         // behind by a failed delete (e.g. an obstacle directory), preserving the failure path.
         try { File.Delete(temp); } catch { }
         using (var stream = OpenFile(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { write(stream); stream.Flush(true); }
+        beforeReplace?.Invoke(path);
         File.Move(temp, path, true);
     }
     internal void Wipe()
