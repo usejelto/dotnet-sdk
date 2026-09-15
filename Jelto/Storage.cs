@@ -8,6 +8,7 @@ namespace Jelto;
 internal sealed class State
 {
     public string InstallId { get; set; } = "";
+    public string? InstallOrigin { get; set; }
     public string? LastAppVersion { get; set; }
     public EventRecord? PendingUpdate { get; set; }
     public bool PendingUpdateDiscarded { get; set; }
@@ -200,7 +201,9 @@ internal sealed class Storage(string directory, Action<string> log) : IDisposabl
             if (new FileInfo(StatePath).Length > 131072) throw new IOException();
             state = JsonSerializer.Deserialize<State>(File.ReadAllBytes(StatePath)) ?? new();
             if (!Guid.TryParseExact(state.InstallId, "D", out var id) || id == Guid.Empty || state.InstallId[14] != '4') throw new JsonException();
+            if (state.InstallOrigin is not ("new" or "existing" or "unknown")) state.InstallOrigin = "unknown";
             if (state.InstallProps is null || state.InstallProps.Count > 20 || state.InstallProps.Any(p => !Wire.PropKey().IsMatch(p.Key) || p.Value is null || !Wire.InstallValue().IsMatch(p.Value))) throw new JsonException();
+            state.InstallProps.Remove("install_origin");
             foreach (var instant in new[] { state.LastHeartbeatDay, state.InstallDueAt, state.InstallFirstTry, state.BackoffNextAt, state.StopUntil })
                 if (instant is not null && Wire.Instant(instant) is null) throw new JsonException();
             if (state.BackoffStepMs is < 0 or > 3600000) throw new JsonException();

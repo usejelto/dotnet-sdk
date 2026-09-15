@@ -63,7 +63,7 @@ internal sealed class Engine : IDisposable
         var day = BigInteger.DivRem(now, 86400000, out var rem);
         return Wire.Decimal(rem < 0 ? day - 1 : day);
     }
-    internal void Initialize(string product, string? app = null, string? url = null) => Safe(() => {
+    internal void Initialize(string product, string? app = null, string? url = null, InstallOrigin installOrigin = InstallOrigin.Unknown) => Safe(() => {
         lock (gate)
         {
             if (initialized || quitting) return;
@@ -74,7 +74,7 @@ internal sealed class Engine : IDisposable
                 AppDomain.CurrentDomain.ProcessExit += OnExit; exitRegistered = true;
             }
             var at = Now();
-            commands.Enqueue(() => { try { Bootstrap(product, app, url, at); } catch { Inactive("SDK initialization failed"); } });
+            commands.Enqueue(() => { try { Bootstrap(product, app, url, at, installOrigin); } catch { Inactive("SDK initialization failed"); } });
             // Started directly rather than via the ThreadPool: a saturated pool must never
             // delay the worker's own dedicated thread, or every Invoke behind it stalls too.
             if (worker is null)
@@ -155,7 +155,7 @@ internal sealed class Engine : IDisposable
             lock (gate) { initialized = false; id = ""; }
         });
     });
-    private void Bootstrap(string product, string? app, string? url, BigInteger now)
+    private void Bootstrap(string product, string? app, string? url, BigInteger now, InstallOrigin installOrigin)
     {
         os = platformOverride ?? (OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : OperatingSystem.IsLinux() && !OperatingSystem.IsAndroid() ? "linux" : "");
         arch = RuntimeInformation.ProcessArchitecture switch { Architecture.X64 => "x64", Architecture.Arm64 => "arm64", Architecture.X86 => "x86", _ => "" };
@@ -181,7 +181,8 @@ internal sealed class Engine : IDisposable
         state = storage.Load(events);
         events.StampMissing(metadata);
         installEnqueuedThisRun = events.Contains("install");
-        CreateIdentity(now);
+        CreateIdentity(now, installOrigin);
+        if (!Save()) { Inactive("could not persist install claim; SDK inactive"); return; }
         if (!ObserveVersion(now)) { Inactive("could not commit app version observation; SDK inactive"); return; }
         if (state.LastHeartbeatDay != Day(now)) { state.LastHeartbeatDay = Day(now); AddHeartbeat(true); }
         initAt = now + 2000;
@@ -239,9 +240,14 @@ internal sealed class Engine : IDisposable
         lock (gate) { accepting = initialized = false; id = ""; events.Clear(); dirty = false; }
     }
     private static string TrimVersion(string value) => value.Length <= 32 ? value : value[..32];
-    private void CreateIdentity(BigInteger now)
+    private void CreateIdentity(BigInteger now, InstallOrigin origin = InstallOrigin.Unknown)
     {
-        if (state.InstallId == "") state.InstallId = Guid.NewGuid().ToString("D");
+        if (state.InstallId == "")
+        {
+            state.InstallId = Guid.NewGuid().ToString("D");
+            state.InstallOrigin = origin switch { InstallOrigin.New => "new", InstallOrigin.Existing => "existing", _ => "unknown" };
+        }
+        state.InstallOrigin ??= "unknown";
         if (!state.InstallClaimed && state.InstallDueAt is null) state.InstallDueAt = Wire.Decimal(now);
         lock (gate) id = state.InstallId;
     }
@@ -352,7 +358,8 @@ internal sealed class Engine : IDisposable
             {
                 installEnqueuedThisRun = true;
                 state.InstallFirstTry ??= Wire.Decimal(now);
-                Add(EventRecord.Create("install", Wire.Decimal(now), "{}"u8.ToArray(), metadata: metadata));
+                var claimProps = Wire.Json(w => { w.WriteStartObject(); w.WriteString("install_origin", state.InstallOrigin ?? "unknown"); w.WriteEndObject(); });
+                Add(EventRecord.Create("install", Wire.Decimal(now), claimProps, metadata: metadata));
                 // Queue immediately while preserving the two-second initial flush (C7).
                 if (initAt is null) pending = true;
                 Save();
@@ -503,6 +510,7 @@ internal sealed class Engine : IDisposable
         var queue = events.Snapshot();
         return JsonSerializer.Serialize(new {
             install_id = id, last_heartbeat_day = state.LastHeartbeatDay, last_app_version = state.LastAppVersion,
+            install_origin = state.InstallOrigin,
             install_claimed = state.InstallClaimed, install_due_at = state.InstallDueAt,
             install_first_try = state.InstallFirstTry, install_props = state.InstallProps,
             backoff_step_ms = state.BackoffStepMs, backoff_next_at = state.BackoffNextAt,

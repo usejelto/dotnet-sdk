@@ -26,7 +26,8 @@ while ((line = Console.ReadLine()) is not null)
                 var initArgs = argument.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 if (initArgs.Length is < 1 or > 2) throw new ArgumentException("init <key> [app]");
                 var watch = Stopwatch.StartNew();
-                JeltoClient.Initialize(initArgs[0], initArgs.Length > 1 ? initArgs[1] : null);
+                var origin = Environment.GetEnvironmentVariable("JELTO_INSTALL_ORIGIN") switch { "new" => InstallOrigin.New, "existing" => InstallOrigin.Existing, _ => InstallOrigin.Unknown };
+                JeltoClient.Initialize(initArgs[0], initArgs.Length > 1 ? initArgs[1] : null, installOrigin: origin);
                 reply["us"] = (long)watch.Elapsed.TotalMicroseconds;
                 break;
             case "track":

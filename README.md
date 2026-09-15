@@ -27,6 +27,22 @@ install claim immediately on first initialization. One product/app per process. 
 arguments select a registered slug and a custom ingest URL; otherwise the endpoint is
 `JELTO_ENDPOINT` or `https://in.jelto.io/v1/e`.
 
+For an app with existing users, supply an optional host classification before
+changing your saved first-launch state:
+
+```csharp
+JeltoClient.Initialize("prd_acmedemo01", installOrigin: InstallOrigin.Existing);
+```
+
+Use `InstallOrigin.New` only when the host knows this is the app installation's
+first launch, `Existing` when it predates Jelto, or `Unknown` (the default) when
+unsure. A missing onboarding-complete flag alone does not prove a new installation.
+Only the category is sent on the install claim, never a date or onboarding history.
+It remains fixed across retries and relaunches; older claims without it stay
+unknown. `Reset()` creates an unknown claim. `Disable()` followed by initialization
+can capture a newly supplied category. Do not put `install_origin` in `SetProps`;
+heartbeats never carry it.
+
 At initialization the SDK compares the entry assembly's displayed version with its persisted
 last known version. A change, including a downgrade, queues `app_updated` with `from_version`
 and `to_version`, retaining the install ID and leaving install counts unchanged. First launch

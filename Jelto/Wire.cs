@@ -81,6 +81,8 @@ internal static partial class Wire
                 values.Add(key, item);
             }
         }
+        if (values.TryGetValue("install_origin", out var origin) && (name != "install" || origin.ValueKind != JsonValueKind.String || origin.GetString() is not ("new" or "existing" or "unknown")))
+        { log("drop event: install_origin is reserved for install and must be new, existing or unknown"); return null; }
         if (name.StartsWith("onboarding:", StringComparison.Ordinal))
         {
             if (!Step().IsMatch(name[11..])) { log("drop onboarding: `<step>` is ^[a-z0-9_-]{1,32}$"); return null; }
@@ -107,6 +109,7 @@ internal static partial class Wire
         // Bound work even for an adversarial IReadOnlyDictionary implementation.
         foreach (var (key, value) in props.Take(21))
         {
+            if (key == "install_origin") { log("drop install property: supply install_origin through initialization, not heartbeat properties"); continue; }
             if (!PropKey().IsMatch(key)) { log("drop install property: keys are ^[a-z0-9_]{1,32}$"); continue; }
             if (value is null || !InstallValue().IsMatch(value)) { log("drop install property: values are ^[a-z0-9_.-]{1,24}$"); continue; }
             result[key] = value;

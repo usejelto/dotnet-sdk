@@ -50,6 +50,72 @@ var tests = new (string Name, Action Run)[] {
         Check(State(resumed).GetProperty("install_claimed").GetBoolean(), "202 did not claim install");
         Check(server.Requests.SelectMany(r => r.GetProperty("e").EnumerateArray()).Count(e => e.GetProperty("n").GetString() == "install") == 1, "install sent twice");
     }),
+    ("install origin enum and default appear only on the claim", () => {
+        Action<string, string?, string?, InstallOrigin> publicInit = JeltoClient.Initialize;
+        Check(publicInit is not null, "public initialization origin argument");
+        foreach (var (origin, expected) in new[]{(InstallOrigin.New,"new"),(InstallOrigin.Existing,"existing"),(InstallOrigin.Unknown,"unknown"),((InstallOrigin)99,"unknown")}) {
+            using var server = new Server(); using var box = new Box(server.Url, Pin);
+            box.Sdk.Initialize(Key, installOrigin: origin);
+            box.Sdk.SetProps(new Dictionary<string,string>{{"install_origin","new"},{"license","paid"}});
+            box.Sdk.Advance(3000);
+            Check(State(box.Sdk).GetProperty("install_origin").GetString() == expected, "wrong captured origin");
+            Check(State(box.Sdk).GetProperty("install_due_at").GetString() == Pin, "origin changed immediate timing");
+            var events = server.Requests.SelectMany(r => r.GetProperty("e").EnumerateArray()).ToArray();
+            var claim = events.Single(e => e.GetProperty("n").GetString() == "install");
+            Check(claim.GetProperty("props").GetProperty("install_origin").GetString() == expected, "wire origin");
+            Check(claim.GetProperty("props").EnumerateObject().Count() == 1, "claim leaked heartbeat properties");
+            Check(events.Where(e => e.GetProperty("n").GetString() == "heartbeat").All(e => !e.TryGetProperty("props", out var props) || !props.TryGetProperty("install_origin", out _)), "heartbeat leaked origin");
+        }
+        using var omitted = new Box(pin: Pin); omitted.Sdk.Initialize(Key);
+        Check(State(omitted.Sdk).GetProperty("install_origin").GetString() == "unknown", "omitted origin should be unknown");
+        Check(Wire.Props("heartbeat", new Dictionary<string,object?>{{"install_origin","new"}}, _ => {}) is null, "track heartbeat accepts origin");
+        Check(Wire.Props("install", new Dictionary<string,object?>{{"install_origin","yesterday"}}, _ => {}) is null, "invalid origin accepts arbitrary text");
+    }),
+    ("queued install origin survives retries relaunch and changed initialization", () => {
+        using var server = new Server { Status=503, RetryAfter="3" };
+        using var box = new Box(server.Url, Pin); box.Sdk.Initialize(Key, installOrigin: InstallOrigin.Existing);
+        var id = box.Sdk.InstallId; box.Sdk.Advance(3000);
+        var before = server.Requests.First().GetProperty("e").EnumerateArray().Single(e => e.GetProperty("n").GetString() == "install").GetRawText();
+        box.Sdk.Initialize(Key, installOrigin: InstallOrigin.New);
+        Check(State(box.Sdk).GetProperty("install_origin").GetString() == "existing", "repeat init rewrote origin");
+        box.Sdk.Dispose();
+        using var resumed = new Engine(box.Path, server.Url, "1788134403000"); resumed.Initialize(Key, installOrigin: InstallOrigin.New);
+        Check(resumed.InstallId == id, "relaunch changed identity");
+        Check(State(resumed).GetProperty("install_origin").GetString() == "existing", "relaunch rewrote origin");
+        server.Status=202; resumed.Advance(10000);
+        var claims = server.Requests.SelectMany(r => r.GetProperty("e").EnumerateArray()).Where(e => e.GetProperty("n").GetString() == "install").ToArray();
+        Check(claims.Length >= 2 && claims.All(e => e.GetRawText() == before), "claim changed during retry");
+    }),
+    ("legacy pending claim omission remains unknown without reclassification", () => {
+        using var server = new Server(); using var box = new Box(pin: Pin);
+        var id = Guid.NewGuid().ToString("D");
+        using (var storage = new Storage(box.Path, _ => {})) {
+            Check(storage.Open(), "legacy storage open");
+            Check(storage.Save(new State { InstallId=id, InstallDueAt=Pin, LastHeartbeatDay=Wire.Decimal(BigInteger.Parse(Pin)/86400000) }), "legacy state save");
+            Check(storage.Sync([EventRecord.Create("install",Pin,"{}"u8.ToArray())],true), "legacy queue save");
+        }
+        var statePath = System.IO.Path.Combine(box.Path,"state.json");
+        var legacy = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(statePath))!.AsObject(); legacy.Remove("InstallOrigin");
+        File.WriteAllText(statePath, legacy.ToJsonString());
+        using var resumed = new Engine(box.Path, server.Url, Pin); resumed.Initialize(Key, installOrigin: InstallOrigin.New);
+        Check(resumed.InstallId == id, "legacy state rotated identity");
+        Check(State(resumed).GetProperty("install_origin").GetString() == "unknown", "legacy recaptured host hint");
+        resumed.Advance(3000);
+        var claim = server.Requests.SelectMany(r => r.GetProperty("e").EnumerateArray()).Single(e => e.GetProperty("n").GetString() == "install");
+        Check(!claim.TryGetProperty("props", out _), "legacy queued claim changed its omitted origin");
+    }),
+    ("reset uses unknown while disable permits a new host hint", () => {
+        using var server = new Server(); using var box = new Box(server.Url, Pin);
+        box.Sdk.Initialize(Key, installOrigin: InstallOrigin.New); var id = box.Sdk.InstallId;
+        box.Sdk.Reset();
+        Check(box.Sdk.InstallId != id, "reset did not rotate identity");
+        Check(State(box.Sdk).GetProperty("install_origin").GetString() == "unknown", "reset reused new origin");
+        box.Sdk.Advance(3000);
+        var claims = server.Requests.SelectMany(r => r.GetProperty("e").EnumerateArray()).Where(e => e.GetProperty("n").GetString() == "install").ToArray();
+        Check(claims.Length == 1 && claims[0].GetProperty("props").GetProperty("install_origin").GetString() == "unknown", "reset reassigned the old queued claim");
+        box.Sdk.Disable(); box.Sdk.Initialize(Key, installOrigin: InstallOrigin.Existing);
+        Check(State(box.Sdk).GetProperty("install_origin").GetString() == "existing", "disable/reinitialize did not capture origin");
+    }),
     ("disable during initialization cannot restore identity", () => {
         for (var i = 0; i < 5; i++)
         {
