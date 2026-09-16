@@ -92,7 +92,7 @@ The source of truth for these SDK event contracts is [spec/wire-v1.md §4](https
 
 ## License properties
 
-Update the install's license when its state changes:
+After initialization, send the current license from your app's saved entitlement state, including for existing customers. Send it again when the state changes:
 
 ```csharp
 JeltoClient.SetProps(new Dictionary<string, string> { ["license"] = "paid" });
