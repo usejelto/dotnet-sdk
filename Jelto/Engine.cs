@@ -173,7 +173,7 @@ internal sealed class Engine : IDisposable
         knownAppVersion = Wire.KnownAppVersion(appVersionOverride ?? assembly?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? assembly?.GetName().Version?.ToString());
         appVersion = knownAppVersion ?? "unknown";
         osVersion = TrimVersion(Environment.OSVersion.Version.ToString());
-        version = versionOverride ?? "dotnet/0.2.2";
+        version = versionOverride ?? "dotnet/0.2.3";
         if (version == "") version = null;
         else if (version.Length > 32 || !Wire.Version().IsMatch(version)) { Log("client version does not match ^[a-z]+/[0-9A-Za-z.+-]{1,24}$; `v` is omitted"); version = null; }
         lock (gate) metadata = new(appVersion, os, osVersion, arch, slug, version);

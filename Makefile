@@ -22,16 +22,21 @@ conformance-run:
 # spec/sdk-conformance.md §1: every scenario passes on a clean machine, twice.
 # The passes share nothing -- each runner starts its own mockd on port 0 with a
 # private control socket and gives every scenario a fresh JELTO_STATE_DIR under
-# its own temporary directory -- so they run concurrently and the gate takes one
-# pass's wall time, not two. The first pass's output is replayed once the second
-# has finished so the log reads as two complete passes.
+# its own temporary directory. Windows runners execute the passes serially:
+# competing .NET processes caused unrelated init/flush/backoff deadlines to miss
+# their unchanged conformance limits. Other platforms run both passes concurrently.
 conformance-twice: build
+ifeq ($(OS),Windows_NT)
+	$(MAKE) conformance-run
+	$(MAKE) conformance-run
+else
 	$(MAKE) conformance-run > "$${TMPDIR:-/tmp}/jelto-conformance-$$$$.log" 2>&1 & pid=$$!; \
 	$(MAKE) conformance-run; second=$$?; \
 	wait $$pid; first=$$?; \
 	echo; echo '--- first pass (ran concurrently with the one above) ---'; \
 	cat "$${TMPDIR:-/tmp}/jelto-conformance-$$$$.log"; rm -f "$${TMPDIR:-/tmp}/jelto-conformance-$$$$.log"; \
 	test "$$first" -eq 0 && test "$$second" -eq 0
+endif
 
 package:
 	DOTNET="$(DOTNET)" python3 pack.py

@@ -63,8 +63,8 @@ jobs:
         run: make test build verify-examples
       - name: Conformance twice
         if: inputs.release || inputs.conformance
-        # Both passes run concurrently in the Makefile: each runner has its own
-        # mockd and state directories, so the gate costs one pass's wall time.
+        # Each pass has its own mockd and state directories. Windows runs them
+        # serially to preserve the timing budgets on shared hosted runners.
         run: make conformance-twice JELTO_CONTRACTS_DIR="$GITHUB_WORKSPACE/.contracts"
 
       - name: Prepare release artifacts
