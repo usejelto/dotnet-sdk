@@ -43,10 +43,12 @@ In WPF, initialize in your application startup flow; in WinForms, before the mai
 ```csharp
 using Jelto;
 
-JeltoClient.Initialize("YOUR_PRODUCT_ID", app: "desktop");
+JeltoClient.Initialize("YOUR_PRODUCT_ID", app: "desktop", installOrigin: InstallOrigin.New);
 ```
 
-Use the registered app slug from **Settings → Installation → Apps**. In your successful export handler:
+Replace `YOUR_PRODUCT_ID` with your product ID (`prd_8f3kq2m9x1`) and use the registered app slug from **Settings → Installation → Apps**. Use `InstallOrigin.New` for an app that had no users before Jelto; otherwise see [Add Jelto to an app with existing users](../start/existing-app.md). Without it, installations are recorded as `InstallOrigin.Unknown`, which Retention, Onboarding and license conversion exclude.
+
+In your successful export handler:
 
 ```csharp
 JeltoClient.Track("export_finished",
@@ -55,8 +57,9 @@ JeltoClient.Track("export_finished",
 
 ## New and existing installations
 
-When using a version with install-origin support, pass the host's classification
-at initialization. For an installation that already existed before Jelto:
+If your app had users before Jelto, derive the classification from each
+installation's saved state instead of hardcoding one value, and read that state
+before your app changes it. For an installation that already existed before Jelto:
 
 ```csharp
 JeltoClient.Initialize("YOUR_PRODUCT_ID", app: "desktop", installOrigin: InstallOrigin.Existing);
@@ -65,7 +68,7 @@ JeltoClient.Initialize("YOUR_PRODUCT_ID", app: "desktop", installOrigin: Install
 Use `InstallOrigin.New` only when the host knows this is the app's first launch;
 use `InstallOrigin.Existing` for a saved earlier installation and
 `InstallOrigin.Unknown` when uncertain (the default).
-Read saved host state before changing it; never send a first-launch date.
+Never send a first-launch date.
 The first claim freezes the classification across retries and later launches.
 Older claims stay unknown and are excluded from new-install cohorts. See
 [Add Jelto to an app with existing users](../start/existing-app.md) for rollout,
@@ -104,7 +107,7 @@ Accepted license values are strings matching `^[a-z0-9_.-]{1,24}$`, such as `fre
 
 Launch the app after enabling telemetry in your own app. Trigger an export, then inspect the product's app activity and Goals for the current date. Jelto discovers `export_finished` and its `format` property when it receives the event; no event registration is required.
 
-The SDK sends daily activity and queues the first install claim immediately on first initialization. Release versions support version-adoption reporting; later version changes are reported without creating a new install. Retention requires elapsed time and a mature sample.
+The SDK sends its first batch, the install claim and a heartbeat, about 2 seconds after initialization, and later events about 5 seconds after they are tracked; if the device is offline or Jelto asks it to retry later, it retries with backoff. Jelto stores events within about a second, so **Settings → Installation → Apps** shows **Receiving app activity** a few seconds later; choose **Check app activity** to refresh. Release versions support version-adoption reporting; later version changes are reported without creating a new install. Retention requires elapsed time and a mature sample.
 
 If data is missing, check the product ID, registered app slug, collection permission and network access. Debug payload logging is for local diagnosis only; turn it off before distributing a build. Do not reset the install ID on each launch. See [Understand app usage](../guides/understand-app-usage.md).
 
