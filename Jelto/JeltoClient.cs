@@ -16,7 +16,7 @@ public static class JeltoClient
 {
     private static readonly Engine engine = new();
     /// <summary>Starts analytics asynchronously. Call once after deciding telemetry may start.</summary>
-    /// <param name="key">Your product key (prd_ followed by ten lowercase letters or digits).</param>
+    /// <param name="key">Your product ID (prd_ followed by ten lowercase letters or digits).</param>
     /// <param name="app">Optional registered app slug; otherwise the server uses the desktop OS.</param>
     /// <param name="endpoint">Optional absolute HTTP(S) ingest URL. Overrides JELTO_ENDPOINT and the production default.</param>
     /// <param name="installOrigin">Optional host classification, captured once for the install claim. Defaults to unknown.</param>

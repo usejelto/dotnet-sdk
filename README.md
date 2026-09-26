@@ -15,28 +15,38 @@ Make, run `make package` from this component's source root, and add
 ```csharp
 using Jelto;
 
-JeltoClient.Initialize("prd_acmedemo01");
+JeltoClient.Initialize("YOUR_PRODUCT_ID", app: "desktop", installOrigin: InstallOrigin.New);
 JeltoClient.Track("project_created");
 JeltoClient.SetProps(new Dictionary<string, string> { ["license"] = "paid" });
 JeltoClient.Onboarding("permissions", "ok");
 ```
 
-Register custom events and their property keys in Settings > Events. Initialize only after
+`InstallOrigin.New` is for an app that had no users before Jelto; otherwise see the
+[existing-app guide](https://jelto.io/docs/start/existing-app).
+
+Replace `YOUR_PRODUCT_ID` with your product ID (for example `prd_8f3kq2m9x1`) and
+`desktop` with your app slug registered under **Settings → Installation → Apps**. Custom
+event names and property keys are discovered when Jelto first receives them; they do
+not need to be registered first. Initialize only after
 telemetry may start. The SDK creates a random install ID, sends a daily heartbeat and queues the
 install claim immediately on first initialization. One product/app per process. Optional named `app` and `endpoint`
 arguments select a registered slug and a custom ingest URL; otherwise the endpoint is
 `JELTO_ENDPOINT` or `https://in.jelto.io/v1/e`.
 
-For an app with existing users, supply an optional host classification before
-changing your saved first-launch state:
+For an app with existing users, derive the classification for each installation from
+your saved first-launch or onboarding state, read before changing it:
 
 ```csharp
-JeltoClient.Initialize("prd_acmedemo01", installOrigin: InstallOrigin.Existing);
+// origin is InstallOrigin.Existing, New or Unknown, chosen from your saved state as below.
+JeltoClient.Initialize("YOUR_PRODUCT_ID", app: "desktop", installOrigin: origin);
 ```
 
-Use `InstallOrigin.New` only when the host knows this is the app installation's
-first launch, `Existing` when it predates Jelto, or `Unknown` (the default) when
-unsure. A missing onboarding-complete flag alone does not prove a new installation.
+Use `InstallOrigin.Existing` when that state shows the installation predates Jelto,
+`InstallOrigin.New` only when the host knows this is the app installation's first
+launch, and `InstallOrigin.Unknown` when unsure. Omitting the argument also sends
+unknown. Never hardcode one value for every installation of an existing app.
+Retention, onboarding and license-conversion reports count only installations
+marked new. A missing onboarding-complete flag alone does not prove a new installation.
 Only the category is sent on the install claim, never a date or onboarding history.
 It remains fixed across retries and relaunches; older claims without it stay
 unknown. `Reset()` creates an unknown claim. `Disable()` followed by initialization
@@ -71,6 +81,12 @@ See the [integration guide](https://jelto.io/docs/sdk/dotnet) for WPF, WinForms 
 Avalonia examples; a pinned copy is in `vendor/jelto/dotnet.md` in the source repository.
 Local packaging does not publish. The tag release workflow publishes to NuGet.org
 after the bootstrap and trusted-publishing setup in RELEASING.md.
+
+## Verify it works
+
+1. Set `JeltoClient.Debug = true` before `Initialize` (or set `JELTO_DEBUG=1`); payloads and diagnostics print to stderr. Turn it off before distributing a build.
+2. Run the app, let it initialize analytics, and keep it open for about 10 seconds.
+3. In the Jelto dashboard, open **Settings → Installation → Apps**; your app shows **Receiving app activity**.
 
 ## Development
 
