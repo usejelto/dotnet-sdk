@@ -56,7 +56,7 @@ jobs:
           cache: false
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
       - name: Component tests and packages
         run: make test build verify-examples
       - name: Conformance twice

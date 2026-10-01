@@ -15,7 +15,7 @@ For installation and account help, see [SUPPORT.md](SUPPORT.md).
 
 ## Local development
 
-.NET SDK 8, Make, Python 3.11 or later for release tooling, and the Go toolchain required by the contracts archive. Set `DOTNET=/absolute/path/to/dotnet` when the executable is not on PATH.
+.NET SDK 10 (it builds the `net8.0` package; tests and the conformance host run on .NET 10), Make, Python 3.11 or later for release tooling, and the Go toolchain required by the contracts archive. Set `DOTNET=/absolute/path/to/dotnet` when the executable is not on PATH.
 
 Fork and clone this repository, create a branch from `main`, and run commands
 from this component's root. The standalone checkout contains its build inputs;

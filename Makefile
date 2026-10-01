@@ -3,7 +3,7 @@
 DOTNET ?= dotnet
 JELTO_CONTRACTS_DIR ?=
 JELTO_CONTRACTS_VERSION = $(shell python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$(JELTO_CONTRACTS_DIR)/spec/contracts/manifest.json")
-CONFORMANCE_HOST = $(if $(filter Windows_NT,$(OS)),$(CURDIR)/ConformanceHost/bin/Release/net8.0/ConformanceHost.exe,$(CURDIR)/conformance-host)
+CONFORMANCE_HOST = $(if $(filter Windows_NT,$(OS)),$(CURDIR)/ConformanceHost/bin/Release/net10.0/ConformanceHost.exe,$(CURDIR)/conformance-host)
 
 build:
 	DOTNET_CLI_TELEMETRY_OPTOUT=1 $(DOTNET) build ConformanceHost -c Release -p:UseSharedCompilation=false
@@ -41,5 +41,8 @@ endif
 package:
 	DOTNET="$(DOTNET)" python3 pack.py
 
+# Consumers on both supported frameworks compile the documented examples
+# against the package just built.
 verify-examples: package
-	DOTNET="$(DOTNET)" python3 verify-examples.py
+	DOTNET="$(DOTNET)" python3 verify-examples.py --framework net8.0
+	DOTNET="$(DOTNET)" python3 verify-examples.py --framework net10.0
