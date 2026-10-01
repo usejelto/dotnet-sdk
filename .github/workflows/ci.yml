@@ -1,8 +1,6 @@
 # Portable workflow: this component directory must be the repository root.
 name: dotnet checks
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -37,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-latest]
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -47,7 +45,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.13'
+          python-version: '3.14'
       - name: Install verified contracts pin
         if: inputs.release || inputs.conformance
         run: python3 vendor/release-tools/release.py contracts
