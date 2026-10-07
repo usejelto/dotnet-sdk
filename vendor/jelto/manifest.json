@@ -2,11 +2,11 @@
   "name": "dotnet-examples",
   "version": "0.1.1",
   "producer": "docs",
-  "producer_commit": "17081cb607203f46d0114f2f9c3c3f686e5d36df",
+  "producer_commit": "3e92f4b4834da8949b2244e73183572bc4dcedb1",
   "files": {
     "dotnet.md": {
       "source": "content/sdk/dotnet.md",
-      "sha256": "df31c5e46448d99e0a835175b151f07a12c6888eaa9cc81005ee87c9df59948f"
+      "sha256": "81820da92d553093445a1d49941538ad69aa85d2c69d2107ac08ca140c3ee08b"
     }
   }
 }
