@@ -370,6 +370,18 @@ internal sealed class Engine : IDisposable
             flight = null;
             if (completed.Generation == generation) Answer(completed, completed.Task.GetAwaiter().GetResult(), now);
         }
+        // C3b: a running SDK sends each new UTC day's heartbeat without another init, or an
+        // app left open across midnight counts only on the days it was launched. Queued ahead
+        // of the stop and retry gates, which govern sending; sent like the install, so a
+        // pending two-second initial flush still carries it (C7). The wake is NextDelay's 60 s
+        // cap, not a midnight deadline: a wait can pause while the machine sleeps.
+        if (state.LastHeartbeatDay != Day(now))
+        {
+            state.LastHeartbeatDay = Day(now);
+            Add(EventRecord.Create("heartbeat", Wire.Decimal(now), "{}"u8.ToArray(), true, metadata));
+            if (initAt is null) pending = true;
+            Save();
+        }
         if (!state.InstallClaimed)
         {
             if (Wire.Instant(state.InstallFirstTry) is { } first && now >= first + 2592000000L) { state.InstallClaimed = true; Save(); }

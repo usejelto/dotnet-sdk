@@ -36,6 +36,17 @@ var tests = new (string Name, Action Run)[] {
         using var resumed = new Engine(box.Path, server.Url, Pin); resumed.Initialize(Key); Check(resumed.InstallId == rotated, "restart identity");
         resumed.Advance(3000); Check(State(resumed).GetProperty("last_heartbeat_day").GetString() == Wire.Decimal(BigInteger.Parse(Pin) / 86400000), "day index");
     }),
+    ("a running engine sends the new UTC day's heartbeat without another init or exit (C3b)", () => {
+        using var server = new Server();
+        using var box = new Box(server.Url, Pin); box.Sdk.Initialize(Key);
+        box.Sdk.Advance(3000); Check(server.Requests.Count() == 1, "first day's batch");
+        box.Sdk.Advance(86400000); Check(server.Requests.Count() == 2, "rollover heartbeat waited for exit");
+        var rollover = server.Requests.Last().GetProperty("e");
+        Check(rollover.GetArrayLength() == 1 && rollover[0].GetProperty("n").GetString() == "heartbeat", "rollover batch");
+        Check(rollover[0].GetProperty("t").GetRawText() == "1788220803000", "rollover instant");
+        Check(State(box.Sdk).GetProperty("last_heartbeat_day").GetString() == "20697", "rollover day");
+        box.Sdk.Advance(3000); Check(server.Requests.Count() == 2, "same day sent a second heartbeat");
+    }),
     ("immediate install deadline and queued event survive relaunch", () => {
         using var server = new Server();
         using var box = new Box(pin: Pin); box.Sdk.Initialize(Key); box.Sdk.Advance(0);
