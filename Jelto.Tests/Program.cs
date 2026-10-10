@@ -327,6 +327,15 @@ var tests = new (string Name, Action Run)[] {
         Check(server.Requests.ElementAt(1).GetProperty("e")[0].GetProperty("n").GetString()=="heartbeat","not heartbeat probe");
         Check(server.Requests.Last().GetProperty("e")[0].GetProperty("n").GetString()=="backlog","backlog not drained");
     }),
+    ("stop.until is bounded to 30 days from receipt (wire §8, rev 0.26)", () => {
+        using var server=new Server{Body="{\"stop\":{\"until\":4000000000,\"scope\":\"app\"}}"};
+        using var far=new Box(server.Url,Pin); far.Sdk.Initialize(Key); far.Sdk.Track("x"); far.Sdk.Advance(6000);
+        var receipt=BigInteger.Parse(Pin)+6000;
+        Check(State(far.Sdk).GetProperty("stop_until").GetString()==Wire.Decimal(receipt+2592000000),"until not bounded to 30 days from receipt");
+        server.Body="{\"stop\":{\"until\":1788134460,\"scope\":\"app\"}}";
+        using var near=new Box(server.Url,Pin); near.Sdk.Initialize(Key); near.Sdk.Track("x"); near.Sdk.Advance(6000);
+        Check(State(near.Sdk).GetProperty("stop_until").GetString()=="1788134460000","near until altered");
+    }),
     ("disable cancels active request; stale response cannot recreate files", () => {
         using var server=new Server{DelayMs=2000,Body="{\"stop\":{\"until\":2000000000,\"scope\":\"app\"}}"};
         using var box=new Box(server.Url); box.Sdk.Initialize(Key); box.Sdk.SetProps(new Dictionary<string,string>{{"license","paid"}});

@@ -516,7 +516,10 @@ internal sealed class Engine : IDisposable
                 if (scope.GetString() == "web") Log("ignoring a stop scoped to web");
                 else if (scope.GetString() == "app" && stop.TryGetProperty("until", out var until) && Wire.Instant(until.GetRawText()) is { } seconds)
                 {
-                    state.StopUntil = Wire.Decimal(seconds * 1000); state.StopProbeDue = true; state.Probe = null;
+                    // Wire §8 (rev 0.26): never park more than 30 days past receipt of the response.
+                    var bound = now + 2592000000L;
+                    if (seconds * 1000 > bound) Log("stop.until exceeds the 30 day ceiling; clamped");
+                    state.StopUntil = Wire.Decimal(BigInteger.Min(seconds * 1000, bound)); state.StopProbeDue = true; state.Probe = null;
                     Log("kill switch: no request until " + state.StopUntil + " ms, scope app");
                 }
             }
