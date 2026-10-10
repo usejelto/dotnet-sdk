@@ -95,10 +95,10 @@ after the bootstrap and trusted-publishing setup in RELEASING.md.
 - `make package`: NuGet package, reproducible-build comparison and CHECKSUMS.
 
 The test/conformance assemblies access internal inspection seams through InternalsVisibleTo;
-those seams are not public configuration APIs. SDK version: 0.2.5. License: MIT.
+those seams are not public configuration APIs. SDK version: 0.2.6. License: MIT.
 
 Run these commands from the SDK directory. Shared conformance requires
-`JELTO_CONTRACTS_DIR` pointing to an extracted Jelto contracts **0.1.7** archive.
+`JELTO_CONTRACTS_DIR` pointing to an extracted Jelto contracts **0.1.8** archive.
 `make verify-examples` compiles the pinned guide in `vendor/jelto/dotnet.md`
 against the local package. Its manifest records the canonical guide and hash;
 refresh it from the source repository instead of editing the snapshot.
